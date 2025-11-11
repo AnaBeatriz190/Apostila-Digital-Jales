@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="pt-br" data-bs-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Plataforma de Ensino</title>
+    
+    <!-- CSS Bootstrap 5.3 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" xintegrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+    
+    <!-- Google Font (Inter) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+
+    <style>
+        /* Estilo base */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8f9fa; /* Fundo claro */
+        }
+        
+        /* Container principal do login */
+        .login-container {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        /* Card de login */
+        .login-card {
+            width: 100%;
+            max-width: 450px;
+            padding: 2.5rem;
+            border: 1px solid #dee2e6;
+            border-radius: 1rem; /* Bordas arredondadas */
+            background-color: #ffffff;
+            box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.05);
+        }
+        
+        /* Título */
+        .login-title {
+            font-weight: 700;
+            color: #343a40;
+            margin-bottom: 1.5rem;
+        }
+        
+        /* Toggle Professor/Aluno (Bootstrap Nav Pills) */
+        .nav-pills .nav-link {
+            border: 1px solid #dee2e6;
+            color: #6c757d; /* Cor do texto inativo */
+            font-weight: 500;
+        }
+        
+        .nav-pills .nav-link.active {
+            background-color: #0d6efd; /* Cor primária do Bootstrap */
+            border-color: #0d6efd;
+            color: #ffffff; /* Texto branco */
+        }
+        
+        /* Ajuste para o toggle parecer com a imagem */
+        .nav-pills .nav-link:first-of-type {
+            border-top-right-radius: 0;
+            border-bottom-right-radius: 0;
+        }
+        .nav-pills .nav-link:last-of-type {
+            border-top-left-radius: 0;
+            border-bottom-left-radius: 0;
+            margin-left: -1px; /* Sobrepõe a borda */
+        }
+        
+        /* Botão de Login (Verde, como na imagem) */
+        .btn-login {
+            background-color: #198754; /* Verde do Bootstrap (btn-success) */
+            border-color: #198754;
+            color: #ffffff;
+            font-weight: 500;
+            padding: 0.75rem;
+        }
+        .btn-login:hover {
+            background-color: #157347;
+            border-color: #146c43;
+        }
+
+        /* Campos do formulário */
+        .form-control {
+            border-radius: 0.5rem; /* Bordas arredondadas */
+            padding: 0.75rem 1rem;
+        }
+        .form-control:focus {
+            box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25); /* Foco azul */
+            border-color: #86b7fe;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container login-container">
+        <div class="login-card">
+            
+            <h2 class="text-center login-title">Bem-vindo(a) de volta!</h2>
+            
+            <!-- Formulário de Login -->
+            <form id="loginForm" action="/login" method="POST">
+                
+                <!-- Toggle Professor/Aluno -->
+                <nav class="nav nav-pills nav-fill mb-4">
+                    <a class="nav-link active" id="tab-professor" data-bs-toggle="tab" href="#professor" role="tab" aria-controls="professor" aria-selected="true">Professor</a>
+                    <a class="nav-link" id="tab-aluno" data-bs-toggle="tab" href="#aluno" role="tab" aria-controls="aluno" aria-selected="false">Aluno</a>
+                </nav>
+                
+                <!-- Input oculto para enviar o tipo de usuário -->
+                <input type="hidden" id="user_type" name="user_type" value="professor">
+                
+                <!-- Campo E-mail -->
+                <div class="mb-3">
+                    <label for="email" class="form-label">e-mail</label>
+                    <input type="email" class="form-control" id="email" name="email" placeholder="seu.email@exemplo.com" required>
+                </div>
+                
+                <!-- Campo Senha -->
+                <div class="mb-4">
+                    <label for="password" class="form-label">senha</label>
+                    <input type="password" class="form-control" id="password" name="password" placeholder="••••••••" required>
+                    <!-- Adicionar um link de "Esqueceu a senha?" aqui se necessário -->
+                </div>
+
+                <!-- Alertas de Erro (Flash Messages) -->
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        {% for category, message in messages %}
+                            <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                                {{ message }}
+                                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+                
+                <!-- Botão de Login -->
+                <div class="d-grid">
+                    <button type="submit" class="btn btn-login">Login</button>
+                </div>
+                
+            </form>
+            
+        </div>
+    </div>
+    
+    <!-- JS Bootstrap 5.3 -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" xintegrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
+    
+    <script>
+        // Script para atualizar o campo oculto 'user_type'
+        const tabProfessor = document.getElementById('tab-professor');
+        const tabAluno = document.getElementById('tab-aluno');
+        const userTypeInput = document.getElementById('user_type');
+
+        tabProfessor.addEventListener('click', function () {
+            userTypeInput.value = 'professor';
+        });
+
+        tabAluno.addEventListener('click', function () {
+            userTypeInput.value = 'aluno';
+        });
+    </script>
+
+</body>
+</html>
