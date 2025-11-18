@@ -52,7 +52,7 @@ python -m venv venv
 # source venv/bin/activate
 
 # 3. Instale as dependências
-pip install -r requirements.txt
+source venv/bin/activate
 
 
 4. Rodar a Aplicação
@@ -67,3 +67,5 @@ flask --app app --debug run
 A aplicação estará disponível em http://127.0.0.1:5000.
 
 Nota sobre o Professor: Como não há mais um script SQL para inserir o professor "admin", você precisará adicioná-lo manualmente na primeira execução (por exemplo, criando uma rota de "primeira-configuração" ou usando o shell do Flask).
+Para criar uma conta Professor utilize esse comando
+python create_admin.py. Se divirta ;)

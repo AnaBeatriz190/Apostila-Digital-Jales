@@ -2,102 +2,186 @@ import os
 import random
 import string
 from flask import Flask, render_template, request, redirect, url_for, session, flash
+# ### MUDANÇA: Importar as ferramentas do Flask-Login
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_sqlalchemy import SQLAlchemy
 from flask_bcrypt import Bcrypt
+# ### MUDANÇA: Importar o 'wraps' para criar decoradores customizados
+from functools import wraps
 
 # --- Configuração da Aplicação ---
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'uma-chave-secreta-bem-dificil-de-adivinhar')
 
 # --- Configuração do Banco de Dados (SQLite) ---
-# Define o caminho absoluto para o arquivo do banco de dados
 base_dir = os.path.abspath(os.path.dirname(__file__))
-# O banco de dados será um arquivo chamado 'app.db' na raiz do projeto
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(base_dir, 'app.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
 
-# --- Modelos de Banco de Dados (SQLAlchemy) ---
-# (Os modelos são idênticos ao exemplo anterior, pois o SQLAlchemy
-# abstrai a diferença entre MySQL e SQLite)
+# --- MUDANÇA: Configuração do Flask-Login ---
+login_manager = LoginManager(app)
+# Se um usuário tentar acessar uma página protegida sem login,
+# ele será redirecionado para a rota 'index' (sua página de login).
+login_manager.login_view = 'index'
+login_manager.login_message = 'Por favor, faça login para acessar esta página.'
+login_manager.login_message_category = 'info'
 
-class Professor(db.Model):
+# --- Modelos de Banco de Dados (SQLAlchemy) ---
+
+# ### MUDANÇA: Adicionar o 'UserMixin'
+# O UserMixin dá ao seu modelo os métodos que o Flask-Login precisa
+# (como 'is_authenticated', 'is_active', etc.)
+class Professor(db.Model, UserMixin):
     """Modelo para o Professor."""
     __tablename__ = 'professor'
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(100), unique=True, nullable=False)
     password_hash = db.Column(db.String(128), nullable=False)
-
-    # Relacionamento com Disciplinas
     disciplinas = db.relationship('Disciplina', back_populates='professor')
 
+    # ### MUDANÇA: Adicionar métodos de senha e get_id
+    # Isso move a lógica de senha para DENTRO do modelo, limpando as rotas.
+    def set_password(self, password):
+        """Gera o hash da senha."""
+        self.password_hash = bcrypt.generate_password_hash(password).decode('utf-8')
+    
+    def check_password(self, password):
+        """Verifica a senha contra o hash."""
+        return bcrypt.check_password_hash(self.password_hash, password)
+
+    def get_id(self):
+        """Retorna um ID único para o Flask-Login (formato: tipo-id)."""
+        return f'professor-{self.id}'
+    
     def __repr__(self):
         return f'<Professor {self.email}>'
 
-class Aluno(db.Model):
+# ### MUDANÇA: Adicionar o 'UserMixin'
+class Aluno(db.Model, UserMixin):
     """Modelo para o Aluno."""
     __tablename__ = 'aluno'
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(100), unique=True, nullable=False)
     password_hash = db.Column(db.String(128), nullable=False)
-    
-    # Status: 'convidado' ou 'ativo'
     status = db.Column(db.String(20), nullable=False, default='convidado')
-    
-    # Flag para forçar a troca de senha
     primeiro_acesso = db.Column(db.Boolean, nullable=False, default=True)
-
-    # Relacionamento com Disciplinas (Muitos-para-Muitos)
     disciplinas = db.relationship('Disciplina', secondary='aluno_disciplina', back_populates='alunos')
+
+    # ### MUDANÇA: Adicionar métodos de senha e get_id
+    def set_password(self, password):
+        """Gera o hash da senha."""
+        self.password_hash = bcrypt.generate_password_hash(password).decode('utf-8')
+    
+    def check_password(self, password):
+        """Verifica a senha contra o hash."""
+        return bcrypt.check_password_hash(self.password_hash, password)
+
+    def get_id(self):
+        """Retorna um ID único para o Flask-Login (formato: tipo-id)."""
+        return f'aluno-{self.id}'
 
     def __repr__(self):
         return f'<Aluno {self.email}>'
+
+# --- (Modelos Disciplina e tabela associativa sem mudanças) ---
 
 class Disciplina(db.Model):
     """Modelo para a Disciplina."""
     __tablename__ = 'disciplina'
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
-    
-    # Chave estrangeira para Professor
     professor_id = db.Column(db.Integer, db.ForeignKey('professor.id'), nullable=False)
-    
-    # Relacionamentos
     professor = db.relationship('Professor', back_populates='disciplinas')
     alunos = db.relationship('Aluno', secondary='aluno_disciplina', back_populates='disciplinas')
 
     def __repr__(self):
         return f'<Disciplina {self.nome}>'
 
-# Tabela de associação para Alunos e Disciplinas (Muitos-para-Muitos)
 aluno_disciplina = db.Table('aluno_disciplina',
     db.Column('aluno_id', db.Integer, db.ForeignKey('aluno.id'), primary_key=True),
     db.Column('disciplina_id', db.Integer, db.ForeignKey('disciplina.id'), primary_key=True)
 )
 
+# --- ### MUDANÇA: User Loader Inteligente ---
+# Esta é a função que o Flask-Login usa para carregar o usuário
+# a partir da sessão.
+@login_manager.user_loader
+def load_user(user_id_string):
+    """Carrega o usuário (Aluno ou Professor) com base no ID 'tipo-id'."""
+    if not user_id_string or '-' not in user_id_string:
+        return None
+    
+    try:
+        user_type, user_id = user_id_string.split('-', 1)
+        user_id = int(user_id)
+        
+        if user_type == 'aluno':
+            # Nota: db.session.get é mais rápido que .query.get
+            return db.session.get(Aluno, user_id)
+        elif user_type == 'professor':
+            return db.session.get(Professor, user_id)
+    except (ValueError, TypeError):
+        # Se o ID for inválido
+        return None
+    
+    return None
+    
+# --- ### MUDANÇA: Decoradores de Rota Customizados ---
+# Isso substitui aqueles 'if session.get(...)' feios em cada rota.
+# Agora você só precisa adicionar @professor_required ou @aluno_required
+
+def professor_required(f):
+    """Garante que o usuário é um professor."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # 'current_user' é fornecido pelo Flask-Login
+        if not current_user.is_authenticated or not isinstance(current_user, Professor):
+            flash('Acesso não autorizado. Área restrita a professores.', 'danger')
+            return redirect(url_for('index'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+def aluno_required(f):
+    """Garante que o usuário é um aluno."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated or not isinstance(current_user, Aluno):
+            flash('Acesso não autorizado. Área restrita a alunos.', 'danger')
+            return redirect(url_for('index'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
 # --- Rotas da Aplicação ---
-# (As rotas são idênticas ao exemplo anterior)
 
 @app.route('/')
 def index():
     """Exibe a página de login."""
-    if session.get('user_id'):
-        # Se já estiver logado, redireciona para o dashboard
-        user_type = session.get('user_type')
-        if user_type == 'professor':
+    # ### MUDANÇA: Usar 'current_user' do Flask-Login
+    if current_user.is_authenticated:
+        # Redireciona com base no tipo de usuário
+        if isinstance(current_user, Professor):
             return redirect(url_for('dashboard_professor'))
-        elif user_type == 'aluno':
+        elif isinstance(current_user, Aluno):
+            # Se ainda for primeiro acesso, força a troca de senha
+            if current_user.primeiro_acesso:
+                 return redirect(url_for('mudar_senha'))
             return redirect(url_for('dashboard_aluno'))
             
-    return render_template('index.html')
+    return render_template('index.html') # Página de login
 
 @app.route('/login', methods=['POST'])
 def login():
     """Processa a tentativa de login."""
+    # ### MUDANÇA: Se já logado, redireciona
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+        
     email = request.form.get('email')
     password = request.form.get('password')
     user_type = request.form.get('user_type') # 'professor' ou 'aluno'
@@ -106,20 +190,24 @@ def login():
         flash('Todos os campos são obrigatórios.', 'warning')
         return redirect(url_for('index'))
 
+    user = None
     if user_type == 'professor':
         user = Professor.query.filter_by(email=email).first()
     else: # user_type == 'aluno'
         user = Aluno.query.filter_by(email=email).first()
 
-    # Verifica se o usuário existe e a senha está correta
-    if user and bcrypt.check_password_hash(user.password_hash, password):
-        # Armazena dados na sessão
-        session['user_id'] = user.id
-        session['user_type'] = user_type
-        session['nome'] = user.nome
-
+    # ### MUDANÇA: Usar o método 'check_password' do modelo
+    if user and user.check_password(password):
+        
+        # ### MUDANÇA: Usar 'login_user' do Flask-Login
+        # (O 'session' manual foi removido)
+        login_user(user) # O Flask-Login cuida da sessão
+        
+        # O 'next' é para onde o Flask-Login quer nos mandar
+        next_page = request.args.get('next')
+        
         if user_type == 'professor':
-            return redirect(url_for('dashboard_professor'))
+            return redirect(next_page or url_for('dashboard_professor'))
         
         else: # user_type == 'aluno'
             # Se for o primeiro acesso, força a troca de senha
@@ -127,59 +215,62 @@ def login():
                 flash('Este é seu primeiro acesso. Por favor, altere sua senha.', 'info')
                 return redirect(url_for('mudar_senha'))
             
-            # Se for convidado, ativa o aluno
             if user.status == 'convidado':
                 user.status = 'ativo'
                 db.session.commit()
                 
-            return redirect(url_for('dashboard_aluno'))
+            return redirect(next_page or url_for('dashboard_aluno'))
 
     else:
-        # Falha no login
         flash('E-mail ou senha inválidos. Tente novamente.', 'danger')
         return redirect(url_for('index'))
 
 @app.route('/logout')
+@login_required # Só pode deslogar se estiver logado
 def logout():
     """Remove o usuário da sessão."""
-    session.clear()
+    # ### MUDANÇA: Usar 'logout_user' do Flask-Login
+    logout_user()
     flash('Você saiu do sistema.', 'success')
     return redirect(url_for('index'))
 
-# --- Dashboards (Placeholders) ---
+# --- Dashboards ---
 
 @app.route('/professor/dashboard')
+# ### MUDANÇA: Usar os decoradores!
+# Veja como ficou mais limpo.
+@login_required
+@professor_required
 def dashboard_professor():
-    """Dashboard do professor (placeholder)."""
-    if session.get('user_type') != 'professor':
-        flash('Acesso não autorizado.', 'danger')
-        return redirect(url_for('index'))
-    
-    nome = session.get('nome', 'Professor')
-    return f'<h1>Bem-vindo, {nome}! (Dashboard do Professor)</h1><a href="{url_for("logout")}">Sair</a>'
+    """Dashboard do professor."""
+    # Não precisamos mais do 'if session.get(...)'
+    # 'current_user' está disponível automaticamente
+    return f'<h1>Bem-vindo, {current_user.nome}! (Dashboard do Professor)</h1><a href="{url_for("logout")}">Sair</a>'
 
 @app.route('/aluno/dashboard')
+# ### MUDANÇA: Usar os decoradores!
+@login_required
+@aluno_required
 def dashboard_aluno():
-    """Dashboard do aluno (placeholder)."""
-    if session.get('user_type') != 'aluno':
-        flash('Acesso não autorizado.', 'danger')
-        return redirect(url_for('index'))
-        
-    nome = session.get('nome', 'Aluno')
-    return f'<h1>Bem-vindo, {nome}! (Dashboard do Aluno)</h1><a href="{url_for("logout")}">Sair</a>'
+    """Dashboard do aluno."""
+    # Não precisamos mais do 'if session.get(...)'
+    return f'<h1>Bem-vindo, {current_user.nome}! (Dashboard do Aluno)</h1><a href="{url_for("logout")}">Sair</a>'
 
-# --- Funcionalidades (Placeholders) ---
+# --- Funcionalidades ---
 
 @app.route('/aluno/mudar-senha', methods=['GET', 'POST'])
+# ### MUDANÇA: Usar os decoradores!
+@login_required
+@aluno_required
 def mudar_senha():
     """Página para o aluno trocar a senha no primeiro acesso."""
-    if session.get('user_type') != 'aluno' or not session.get('user_id'):
-        flash('Acesso não autorizado.', 'danger')
-        return redirect(url_for('index'))
     
-    aluno = db.session.get(Aluno, session['user_id'])
-    if not aluno or not aluno.primeiro_acesso:
-        # Se não for mais o primeiro acesso, manda para o dashboard
+    # ### MUDANÇA: 'aluno' agora é 'current_user'
+    # 'db.session.get(Aluno, session['user_id'])' foi removido
+    aluno = current_user 
+    
+    # Se não for mais o primeiro acesso, manda embora
+    if not aluno.primeiro_acesso:
         return redirect(url_for('dashboard_aluno'))
 
     if request.method == 'POST':
@@ -194,11 +285,10 @@ def mudar_senha():
             flash('As senhas não coincidem.', 'warning')
             return render_template('mudar_senha.html')
 
-        # Atualiza a senha e o status
-        aluno.password_hash = bcrypt.generate_password_hash(nova_senha).decode('utf-8')
+        # ### MUDANÇA: Usar o método 'set_password'
+        aluno.set_password(nova_senha) 
         aluno.primeiro_acesso = False
         
-        # Ativa o aluno, caso fosse convidado
         if aluno.status == 'convidado':
             aluno.status = 'ativo'
             
@@ -211,44 +301,49 @@ def mudar_senha():
 
 
 @app.route('/professor/cadastrar-aluno', methods=['POST'])
+# ### MUDANÇA: Usar os decoradores!
+@login_required
+@professor_required
 def cadastrar_aluno():
-    """
-    Placeholder da lógica para o professor cadastrar um aluno.
-    Isso seria chamado de dentro do dashboard do professor.
-    """
-    if session.get('user_type') != 'professor':
-        return "Acesso negado", 403
-
-    # Dados vindos de um formulário no dashboard do professor
+    """Lógica para o professor cadastrar um aluno."""
+    
     nome_aluno = request.form.get('nome_aluno')
     email_aluno = request.form.get('email_aluno')
     id_disciplina = request.form.get('id_disciplina')
     
-    # 1. Gerar senha aleatória (8-12 dígitos)
+    # Validação simples (pode melhorar)
+    if not nome_aluno or not email_aluno:
+         flash('Nome e e-mail do aluno são obrigatórios.', 'warning')
+         return redirect(url_for('dashboard_professor'))
+
+    # Verifica se o aluno já existe
+    if Aluno.query.filter_by(email=email_aluno).first():
+        flash(f'O e-mail {email_aluno} já está cadastrado.', 'warning')
+        return redirect(url_for('dashboard_professor'))
+        
     comprimento = random.randint(8, 12)
     senha_aleatoria = ''.join(random.choices(string.ascii_letters + string.digits, k=comprimento))
-    senha_hash = bcrypt.generate_password_hash(senha_aleatoria).decode('utf-8')
     
-    # 2. Criar o aluno (como convidado e primeiro_acesso=True)
     try:
         novo_aluno = Aluno(
             nome=nome_aluno,
             email=email_aluno,
-            password_hash=senha_hash,
             status='convidado',
             primeiro_acesso=True
         )
+        # ### MUDANÇA: Usar 'set_password' ao criar
+        novo_aluno.set_password(senha_aleatoria)
         
-        # 3. Associar à disciplina
-        disciplina = db.session.get(Disciplina, id_disciplina)
-        if disciplina:
-            novo_aluno.disciplinas.append(disciplina)
+        if id_disciplina:
+            disciplina = db.session.get(Disciplina, int(id_disciplina))
+            if disciplina:
+                novo_aluno.disciplinas.append(disciplina)
         
         db.session.add(novo_aluno)
         db.session.commit()
         
         # 4. (PASSO CRÍTICO) Enviar e-mail para o aluno
-        # Aqui você integraria um serviço de e-mail (ex: Flask-Mail)
+        # (A simulação está ótima)
         print(f"--- SIMULAÇÃO DE E-MAIL ---")
         print(f"Para: {email_aluno}")
         print(f"Assunto: Convite para a plataforma")
@@ -261,16 +356,18 @@ def cadastrar_aluno():
         
     except Exception as e:
         db.session.rollback()
-        flash(f'Erro ao cadastrar aluno: {e}', 'danger')
+        # Se for um erro de e-mail único
+        if 'UNIQUE constraint' in str(e):
+             flash(f'O e-mail {email_aluno} já está cadastrado.', 'danger')
+        else:
+             flash(f'Erro ao cadastrar aluno: {e}', 'danger')
 
     return redirect(url_for('dashboard_professor'))
 
 
 # --- Execução da Aplicação ---
 if __name__ == '__main__':
-    # Cria as tabelas se não existirem
     with app.app_context():
         db.create_all()
     
-    # Executa a aplicação em modo de debug
     app.run(debug=True)
